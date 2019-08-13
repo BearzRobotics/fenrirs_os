@@ -4,6 +4,8 @@ use core::fmt::Write;
 
 // external crates
 use volatile::Volatile;
+use spin::Mutex;
+use lazy_static::lazy_static;
 
 
 #[allow(dead_code)]
@@ -59,6 +61,7 @@ pub struct Writer {
     buffer: &'static mut Buffer,
 }
 
+
 impl Writer {
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
@@ -82,7 +85,25 @@ impl Writer {
     }
 
     fn new_line(&mut self) {
-        /* TODO */
+        for row in 1..BUFFER_HEIGHT {
+            for col in 0..BUFFER_WIDTH {
+                let character = self.buffer.chars[row][col].read();
+                self.buffer.chars[row - 1][col].write(character);
+            }
+        }
+        self.clear_row(BUFFER_HEIGHT - 1);
+        self.column_position = 0;
+    }
+
+    fn clear_row(&mut self, row: usize) {
+        let blank = ScreenChar {
+            ascii_character: b' ',
+            color_code: self.color_code,
+        };
+
+        for col in 0..BUFFER_WIDTH {
+            self.buffer.chars[row][col].write(blank);
+        }
     }
 
     pub fn write_string(&mut self, s: &str) {
@@ -97,6 +118,16 @@ impl Writer {
     }
 }
 
+lazy_static! {
+    pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
+        column_position: 0,
+        color_code: ColorCode::new(Color::White, Color::Black),
+        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+    });
+}
+
+
+
 impl fmt::Write for Writer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_string(s);
@@ -105,16 +136,19 @@ impl fmt::Write for Writer {
 }
 
 
-// test
-pub fn print_something() {
-    let mut writer = Writer {
-        column_position: 0,
-        color_code: ColorCode::new(Color::Yellow, Color::Black),
-        buffer: unsafe {&mut *(0xb8000 as *mut Buffer) },
-    };
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*)));
+}
 
-    writer.write_byte(b'H');
-    writer.write_string("ello ");
-    writer.write_string("world! ");
-    write!(writer, "The numbers are {} and {}", 42, 1.0/3.0).unwrap();
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+#[doc(hidden)]
+pub fn _print(args: fmt::Arguments) {
+    use core::fmt::Write;
+    WRITER.lock().write_fmt(args).unwrap();
 }
